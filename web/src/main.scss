@@ -1,0 +1,8 @@
+$semantic-root-element: '#root';
+@import "@picocss/pico/scss/pico";
+
+#buttons {
+  a[role="button"] {
+    margin-right: calc(var(--spacing) * 0.5);
+  }
+}
