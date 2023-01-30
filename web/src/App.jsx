@@ -24,7 +24,9 @@ const getLocalStream = async ({ audio, video } = { audio: true, video: true }) =
   // TODO: draw audio only
   const canvas = Object.assign(document.createElement('canvas'), { width: 320, height: 240 })
   canvas.getContext('2d').fillRect(0, 0, 320, 240)
-  const blankStream = canvas.captureStream()
+  canvas.getContext('2d').fillStyle = 'white'
+  canvas.getContext('2d').fillText("Sound Only", 10, 50)
+  const blankStream = canvas.captureStream(15)
   blankStream.addTrack(userStream.getAudioTracks()[0])
 
   return blankStream
@@ -55,46 +57,51 @@ function App() {
     pub.ws.on(`room:${room}:leave`, ({ peerId }) => {
       // If in conference, close the peer
       console.log('hand up peer', peerId)
+
       hangUpPeer(peerId)
     })
 
-    return () => {
-      pub.ws.off(`room:${room}:join`)
-      pub.ws.off(`room:${room}:leave`)
-    }
-  }, [pub, peers])
-
-  async function connectToRoom() {
-    const stream = await getLocalStream({ audio: true, video: false }) // disable video for example
-    const peer = createPub()
-    peer.on('open', id => {
-      const ws = connectWs()
-      console.log('Connect ws, id:', id)
-      setPub({ ...pub, peer, ws, stream })
-      ws.emit('join', { room, name, peerId: id })
+    pub.peer.on('open', id => {
+      pub.ws.emit('join', { room, name, peerId: id })
+      setPub({ ...pub })
     })
     // Response to the caller
-    peer.on('call', call => {
-      console.log('Answer call', call)
+    pub.peer.on('call', call => {
+      console.log('Answer call')
       call.answer(pub.stream)
       let count = 0 // every tracks will emit one stream event, so when both audio & video publish we will get two stream events
-      call.on('stream', remoteStream => {
+      call.on('stream', () => {
         // We only need to setRemoteStream once
         if (count > 0) return
         count++
 
-        setPeers(prev => [...prev, { peer: call, stream: remoteStream }])
+        console.log('Got call stream')
+        setPeers(prev => [...prev, { peer: call }])
       })
       call.on('close', () => {
         console.log('call close')
-        setPeers(prev => prev.filter(i => i.peer.peer !== call.peer))
+        //stream.getTracks().forEach(track => track.stop())
+        hangUpPeer(call.peer)
       })
     })
-    peer.on('error', err => {
+    pub.peer.on('error', err => {
       console.error(err)
     })
-    // TODO, maybe we don't need to connect with all the peers in the room
-    // because peers in room will call this peer when it join the room
+    return () => {
+      pub.ws.off(`room:${room}:join`)
+      pub.ws.off(`room:${room}:leave`)
+      pub.peer.off('open')
+      pub.peer.off('call')
+      pub.peer.off('error')
+    }
+  }, [pub])
+
+  async function connectToRoom() {
+    const stream = await getLocalStream({ audio: true, video: false }) // disable video for example
+    const peer = createPub()
+    const ws = connectWs()
+
+    setPub(prev => ({ ...prev, peer, ws, wsInited: true, stream }))
   }
 
   function callPeer(id, peerName) {
@@ -109,7 +116,7 @@ function App() {
     }
     let count = 0 // every tracks will emit one stream event, so when both audio & video publish we will get two stream events
     //let _monitor
-    call.on('stream', (stream) => {
+    call.on('stream', () => {
       // We only need to setRemoteStream once
       if (count > 0) return
       count++
@@ -118,22 +125,22 @@ function App() {
       //  const setting = stream.getVideoTracks()[0]?.getSettings()
       //  setting && setStatus({ height: setting.height, width: setting.width, fps: setting.frameRate, bitrate: 0 })
       //}, 1000)
-      console.log('get stream!')
+      setPeers(prev => [...prev, { peer: call, name: peerName }])
     })
     call.on('close', () => {
       //_monitor && clearInterval(_monitor)
       setPeers(prev => prev.filter(i => i.peer.id !== call.peer.id))
     })
-
-    setPeers(prev => [...prev, { peer: call, name: peerName }])
   }
 
   function hangUpPeer(id) {
-    const peer = peers.find(i => i.peer.peer === id)
-    peer && peer.peer.close()
-    const rest = peers.filter(i => i.peer.peer !== id)
-    console.log('rest', rest)
-    setPeers(rest)
+    setPeers(prev => {
+      const peer = prev.find(i => i.peer.peer === id)
+      peer && peer.peer.close()
+      const rest = prev.filter(i => i.peer.peer !== id)
+
+      return rest
+    })
   }
 
   function disconnect() {
@@ -149,6 +156,7 @@ function App() {
   function toggleAudio() {
     console.log('toggle audio',pub.stream.getAudioTracks()[0].enabled)
     pub.stream.getAudioTracks()[0].enabled = !pub.stream.getAudioTracks()[0].enabled
+    setPub({ ...pub })
   }
 
   return (
@@ -186,9 +194,11 @@ function App() {
       </div>
       <div className="grid">
         {peers.map((p, i) => {
+          console.log(p.peer.remoteStream)
           return (
             <div key={i} className="card">
-              {p.name || p.peer.metadata.from /* name for caller, from for answerer */ }
+              { /* name for caller, from for answerer */ }
+              <div>{ p.name || p.peer.metadata.from } / {p.peer.peer} </div>
               {<ReactPlayer url={p.peer.remoteStream} playing={true} muted={isMute} />}
             </div>
           )
